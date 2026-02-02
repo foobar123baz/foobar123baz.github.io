@@ -291,6 +291,18 @@
         ratingElement.className = `card__vote rate--${source}`;
         ratingElement.innerHTML = '';
         ratingElement.style.display = '';
+        
+        // Функция для отображения TMDB рейтинга как fallback
+        function showTMDBFallback() {
+            const tmdbRating = getTMDBRating(data);
+            if (tmdbRating !== '0.0') {
+                ratingElement.className = 'card__vote rate--tmdb';
+                ratingElement.innerHTML = `${tmdbRating} <span class="source--name"></span>`;
+            } else {
+                ratingElement.style.display = 'none';
+            }
+        }
+        
         if (source === 'tmdb') {
             const rating = getTMDBRating(data);
             if (rating !== '0.0') {
@@ -322,9 +334,13 @@
                             }
                             ratingElement.innerHTML = html;
                         } else {
-                            ratingElement.style.display = 'none';
+                            // Fallback на TMDB если Lampa рейтинг = 0
+                            showTMDBFallback();
                         }
                     }
+                }).catch(() => {
+                    // Fallback на TMDB при ошибке загрузки Lampa
+                    showTMDBFallback();
                 });
             });
         } else if (source === 'kp' || source === 'imdb') {
@@ -333,7 +349,8 @@
                     if (rating !== '0.0') {
                         ratingElement.innerHTML = `${rating} <span class="source--name"></span>`;
                     } else {
-                        ratingElement.style.display = 'none';
+                        // Fallback на TMDB если KP/IMDB рейтинг = 0
+                        showTMDBFallback();
                     }
                 }
             });
@@ -375,6 +392,13 @@
                                 html += ` <img style="width:1em;height:1em;margin:0 0.2em;" src="${reactionSrc}">`;
                             }
                             ratingElement.innerHTML = html;
+                        } else if (cached && cached.rating === 0 && ratingElement.innerHTML === '') {
+                            // Fallback на TMDB из кэша если Lampa = 0
+                            const tmdbCached = ratingCache.get('tmdb_rating', data.id);
+                            if (tmdbCached && tmdbCached.vote_average > 0) {
+                                ratingElement.className = 'card__vote rate--tmdb';
+                                ratingElement.innerHTML = `${tmdbCached.vote_average.toFixed(1)} <span class="source--name"></span>`;
+                            }
                         }
                     } else if (source === 'tmdb') {
                         const ratingKey = data.id;
@@ -384,9 +408,18 @@
                         }
                     } else if (source === 'kp' || source === 'imdb') {
                         const cached = ratingCache.get('kp_rating', data.id);
-                        if (cached && (cached.kp > 0 || cached.imdb > 0) && ratingElement.innerHTML === '') {
+                        if (cached && ratingElement.innerHTML === '') {
                             const rating = source === 'kp' ? cached.kp : cached.imdb;
-                            ratingElement.innerHTML = `${parseFloat(rating).toFixed(1)} <span class="source--name"></span>`;
+                            if (rating > 0) {
+                                ratingElement.innerHTML = `${parseFloat(rating).toFixed(1)} <span class="source--name"></span>`;
+                            } else {
+                                // Fallback на TMDB из кэша если KP/IMDB = 0
+                                const tmdbCached = ratingCache.get('tmdb_rating', data.id);
+                                if (tmdbCached && tmdbCached.vote_average > 0) {
+                                    ratingElement.className = 'card__vote rate--tmdb';
+                                    ratingElement.innerHTML = `${tmdbCached.vote_average.toFixed(1)} <span class="source--name"></span>`;
+                                }
+                            }
                         }
                     }
                 }
