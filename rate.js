@@ -26,10 +26,76 @@
         }
     };
 
+    // Массив API ключей для ротации
+    const kinopoiskApiKeys = [
+        '904ac6be-4b12-49c4-add1-ecf4b043fd11',
+        'a1577832-d370-4020-9be4-7ba9756d5fcc',
+        '4bd26e5b-8955-4feb-8bde-d2878b23ff11'
+    ];
+
+    // Rate limiting для каждого API ключа
+    const MAX_REQUESTS_PER_SECOND = 18; // Безопасный лимит (меньше чем 20)
+    const RATE_LIMIT_WINDOW = 1000;
+    
+    const apiKeyStats = kinopoiskApiKeys.map(key => ({
+        key: key,
+        requests: [], // массив timestamp'ов запросов
+        lastCleanup: Date.now()
+    }));
+    
+    let currentKeyIndex = 0;
+
+    // Очистка старых timestamp'ов (старше 1 секунды)
+    function cleanupOldRequests(stats) {
+        const now = Date.now();
+        if (now - stats.lastCleanup > 500) { // очищаем каждые 500ms
+            stats.requests = stats.requests.filter(timestamp => now - timestamp < RATE_LIMIT_WINDOW);
+            stats.lastCleanup = now;
+        }
+    }
+
+    // Проверка, можно ли использовать этот ключ
+    function canUseApiKey(stats) {
+        cleanupOldRequests(stats);
+        return stats.requests.length < MAX_REQUESTS_PER_SECOND;
+    }
+
+    // Регистрация использования API ключа
+    function registerApiKeyUsage(stats) {
+        stats.requests.push(Date.now());
+    }
+
+    // Получение следующего доступного API ключа
+    function getNextApiKey() {
+        const startIndex = currentKeyIndex;
+        
+        // Пытаемся найти свободный ключ
+        do {
+            const stats = apiKeyStats[currentKeyIndex];
+            if (canUseApiKey(stats)) {
+                const key = stats.key;
+                registerApiKeyUsage(stats);
+                currentKeyIndex = (currentKeyIndex + 1) % kinopoiskApiKeys.length;
+                return key;
+            }
+            currentKeyIndex = (currentKeyIndex + 1) % kinopoiskApiKeys.length;
+        } while (currentKeyIndex !== startIndex);
+        
+        // Если все ключи заняты, берем первый и регистрируем
+        // (будет небольшая задержка из-за taskInterval)
+        const stats = apiKeyStats[0];
+        const key = stats.key;
+        registerApiKeyUsage(stats);
+        currentKeyIndex = 1;
+        return key;
+    }
+
     const CACHE_TIME = 24 * 60 * 60 * 1000;
     let taskQueue = [];
     let isProcessing = false;
-    const taskInterval = 300;
+    // Увеличиваем интервал для безопасности при rate limiting
+    // При 2 токенах и интервале 60ms: макс ~33 req/sec, распределенных между токенами
+    const taskInterval = Math.max(60, Math.floor(1000 / (MAX_REQUESTS_PER_SECOND * kinopoiskApiKeys.length)));
 
     let requestPool = [];
     function getRequest() {
@@ -102,10 +168,13 @@
             const title = cleanString(item.title || item.name);
             const releaseYear = parseInt(String(item.release_date || item.first_air_date || item.last_air_date || "0000").slice(0, 4));
             const originalTitle = item.original_title || item.original_name;
+            
+            // Получаем следующий доступный API ключ с учетом rate limiting
+            const apiKey = getNextApiKey();
             const api = {
                 url: 'https://kinopoiskapiunofficial.tech/',
                 rating_url: 'api/v2.2/films/',
-                headers: { 'X-API-KEY': '904ac6be-4b12-49c4-add1-ecf4b043fd11' }
+                headers: { 'X-API-KEY': apiKey }
             };
 
             function searchMovies() {
@@ -151,6 +220,10 @@
                 if (filteredResults.length >= 1) {
                     const movieId = filteredResults[0].kp_id || filteredResults[0].kinopoisk_id || filteredResults[0].kinopoiskId || filteredResults[0].filmId;
                     if (movieId) {
+                        // Для второго запроса берем новый ключ (может быть тот же, но с учетом rate limit)
+                        const apiKey2 = getNextApiKey();
+                        const headers2 = { 'X-API-KEY': apiKey2 };
+                        
                         request.timeout(15000);
                         request.silent(`${api.url}${api.rating_url}${movieId}`, (data) => {
                             const cachedData = ratingCache.set('kp_rating', item.id, {
@@ -165,7 +238,7 @@
                         }, () => {
                             releaseRequest(request);
                             callback('0.0');
-                        }, false, { headers: api.headers });
+                        }, false, { headers: headers2 });
                     } else {
                         releaseRequest(request);
                         callback('0.0');
